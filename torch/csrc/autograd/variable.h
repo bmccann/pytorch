@@ -1,6 +1,5 @@
 #pragma once
 
-#include <mutex>
 #include <memory>
 #include <functional>
 #include <THPP/THPP.h>
@@ -13,7 +12,7 @@ namespace torch { namespace autograd {
 
 struct VariableVersion;
 
-struct Variable : std::enable_shared_from_this<Variable> {
+struct Variable : public Function {
   Variable(
       std::unique_ptr<thpp::Tensor> data,
       std::shared_ptr<Function> grad_fn);
@@ -21,29 +20,29 @@ struct Variable : std::enable_shared_from_this<Variable> {
   Variable(
       std::unique_ptr<thpp::Tensor> data,
       bool requires_grad,
-      bool is_volatile);
+      bool is_volatile,
+      bool is_leaf = true);
+
+  void accumulate_grad(std::shared_ptr<Variable> gradOutput);
+  virtual variable_list apply(const variable_list& gradOutputs) override;
 
   SavedVariable save() const;
   static SavedVariable save_opt(Variable* var);
 
-  std::shared_ptr<Function> get_grad_accumulator();
-
-  static inline std::shared_ptr<Variable> of(std::unique_ptr<thpp::Tensor> data, bool is_volatile=false) {
+  static inline std::shared_ptr<Variable> of(std::unique_ptr<thpp::Tensor> data) {
     if (!data) {
       return std::shared_ptr<Variable>();
     }
-    return std::make_shared<Variable>(std::move(data), false, is_volatile);
+    return std::make_shared<Variable>(std::move(data), false, false);
   }
 
   std::unique_ptr<thpp::Tensor> data;
   std::shared_ptr<Function> grad_fn;
   std::shared_ptr<Variable> grad;
   std::unique_ptr<VariableVersion> version_counter;
-  std::vector<std::shared_ptr<FunctionPreHook>> hooks;
-  std::weak_ptr<Function> grad_accumulator;
-  std::mutex grad_accumulator_lock;
   bool requires_grad;
   bool is_volatile;
+  bool is_leaf;
   int output_nr;
   PyObject *pyobj;  // weak reference
 };
