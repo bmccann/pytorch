@@ -189,14 +189,12 @@ def once_differentiable(fn):
         outputs = fn(ctx, *tensor_args)
         volatile = any(arg.volatile if isinstance(arg, Variable) else False
                        for arg in args)
-        requires_grad = any(arg.requires_grad if isinstance(arg, Variable) else False
+        requires_grad = any(arg.volatile if isinstance(arg, Variable) else False
                             for arg in args)
         if volatile:
             kwargs = {'volatile': True}
         else:
-            err_fn = Error()
-            err_fn.requires_grad = requires_grad
-            kwargs = {'requires_grad': requires_grad, '_grad_fn': err_fn}
+            kwargs = {'requires_grad': requires_grad, '_grad_fn': Error()}
         if not isinstance(outputs, tuple):
             return Variable(outputs, **kwargs) if outputs is not None else None
         return tuple([Variable(o, **kwargs) if o is not None else None
