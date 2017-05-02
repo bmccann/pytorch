@@ -49,8 +49,7 @@ auto Variable::get_grad_accumulator() -> std::shared_ptr<Function> {
   static std::shared_ptr<Function> null_shared_ptr;
   static weak_type null_weak_ptr;
 
-  if (grad_fn) return nullptr;
-  if (!requires_grad) return nullptr;
+  if (!requires_grad) return std::shared_ptr<Function>();
 
   auto result = grad_accumulator.lock();
   if (result) return result;
@@ -89,12 +88,6 @@ auto SavedVariable::unpack() -> std::shared_ptr<Variable> {
     new_var->grad_fn = grad_fn;
   }
   new_var->version_counter->join_with(*version);
-  // If a Variable is a leaf (no grad_fn saved), and it requires_grad, then we
-  // should have saved the grad accumulator. Even if the Variable no longer
-  // alive, the accumulator should be kept alive by the references in the graph).
-  if (requires_grad && !grad_fn && weak_grad_fn.expired() && grad_accumulator.expired())
-      throw std::logic_error("No grad accumulator for a saved leaf!");
-  new_var->grad_accumulator = grad_accumulator;
 
   return new_var;
 }

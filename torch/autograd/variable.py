@@ -4,6 +4,8 @@ from collections import OrderedDict
 import torch.sparse as sparse
 import torch.utils.hooks as hooks
 
+from ._functions import *
+
 
 class Variable(_C._VariableBase):
     """Wraps a tensor and records the operations applied to it.
@@ -62,18 +64,23 @@ class Variable(_C._VariableBase):
         raise AttributeError(name)
 
     def __getitem__(self, key):
-        if isinstance(key, Variable) and type(key.data).__name__ == 'ByteTensor':
-            return MaskedSelect.apply(self, key)
-        return Index.apply(self, key)
+        if (isinstance(key, Variable) and
+                type(key.data).__name__ == 'ByteTensor'):
+            return MaskedSelect()(self, key)
+        return Index(key)(self)
 
     def __setitem__(self, key, value):
-        if isinstance(key, Variable) and type(key.data).__name__ == 'ByteTensor':
+        if (isinstance(key, Variable) and
+                type(key.data).__name__ == 'ByteTensor'):
             if isinstance(value, Variable):
-                return MaskedCopy.apply(self, key, value, True)
+                return MaskedCopy(inplace=True)(self, key, value)
             else:
-                return MaskedFill.apply(self, key, value, True)
+                return MaskedFill(value, inplace=True)(self, key)
         else:
-            return SetItem.apply(self, key, value)
+            if isinstance(value, Variable):
+                return SetItem(key)(self, value)
+            else:
+                return SetItem(key, value)(self)
 
     def __deepcopy__(self, memo):
         if not self.is_leaf:
@@ -223,11 +230,11 @@ class Variable(_C._VariableBase):
         return self
 
     def clone(self):
-        return Clone.apply(self)
+        return Clone()(self)
 
     def type(self, t):
         if t != type(self.data):
-            return Type.apply(self, t)
+            return Type(t)(self)
         return self
 
     def type_as(self, t):
@@ -238,7 +245,7 @@ class Variable(_C._VariableBase):
         return getattr(module, name)
 
     def cuda(self, device_id=None, async=False):
-        return CudaTransfer.apply(self, device_id, async)
+        return CudaTransfer(device_id, async)(self)
 
     def cpu(self):
         return self.type(getattr(torch, type(self.data).__name__))
@@ -272,10 +279,10 @@ class Variable(_C._VariableBase):
 
     def _add(self, other, inplace):
         if isinstance(other, Variable):
-            return Add.apply(self, other, inplace)
+            return Add(inplace)(self, other)
         else:
             assert not torch.is_tensor(other)
-            return AddConstant.apply(self, other, inplace)
+            return AddConstant(other, inplace)(self)
 
     def add(self, other):
         return self._add(other, False)
@@ -285,10 +292,10 @@ class Variable(_C._VariableBase):
 
     def _sub(self, other, inplace):
         if isinstance(other, Variable):
-            return Sub.apply(self, other, inplace)
+            return Sub(inplace=inplace)(self, other)
         else:
             assert not torch.is_tensor(other)
-            return SubConstant.apply(self, other, inplace)
+            return SubConstant(other, inplace=inplace)(self)
 
     def sub(self, other):
         return self._sub(other, False)
@@ -298,33 +305,34 @@ class Variable(_C._VariableBase):
 
     def mul(self, other):
         if isinstance(other, Variable):
-            return Mul.apply(self, other)
+            return Mul()(self, other)
         else:
             assert not torch.is_tensor(other)
-            return MulConstant.apply(self, other)
+            return MulConstant(other)(self)
 
     def mul_(self, other):
         if not isinstance(other, Variable) and not torch.is_tensor(other):
-            return MulConstant.apply(self, other, True)
+            return MulConstant(other, inplace=True)(self)
         raise RuntimeError("mul_ only supports scalar multiplication")
 
     def div(self, other):
         if isinstance(other, Variable):
-            return Div.apply(self, other)
+            return Div()(self, other)
         else:
             assert not torch.is_tensor(other)
-            return DivConstant.apply(self, other)
+            return DivConstant(other)(self)
 
     def div_(self, other):
-        assert not torch.is_tensor(other)
-        return DivConstant.apply(self, other, True)
+        if not isinstance(other, Variable) and not torch.is_tensor(other):
+            return DivConstant(other, inplace=True)(self)
+        raise RuntimeError("div_ only supports scalar multiplication")
 
     def pow(self, other):
         if isinstance(other, Variable):
-            return Pow.apply(self, other)
+            return Pow()(self, other)
         else:
             assert not torch.is_tensor(other)
-            return PowConstant.apply(self, other)
+            return PowConstant(other)(self)
 
     def exp(self):
         return Exp()(self)
@@ -339,10 +347,10 @@ class Variable(_C._VariableBase):
         return Log1p()(self)
 
     def neg(self):
-        return Negate.apply(self)
+        return Negate()(self)
 
     def neg_(self):
-        return Negate.apply(self, True)
+        return Negate(inplace=True)(self)
 
     def tanh(self):
         return Tanh()(self)
@@ -459,16 +467,16 @@ class Variable(_C._VariableBase):
         return Kthvalue(dim)(self)
 
     def sort(self, dim=None, descending=False):
-        return Sort.apply(self, dim, descending, True)
+        return Sort(dim, descending)(self)
 
     def topk(self, k, dim=None, largest=True, sorted=True):
-        return Topk.apply(self, k, dim, largest, sorted, True)
+        return Topk(k, dim, largest, sorted)(self)
 
     def view(self, *sizes):
-        return View.apply(self, sizes)
+        return View(*sizes)(self)
 
     def view_as(self, tensor):
-        return View.apply(self, tensor.size())
+        return View(*tensor.size())(self)
 
     def split(self, split_size, dim=0):
         return torch.split(self, split_size, dim)
@@ -478,7 +486,7 @@ class Variable(_C._VariableBase):
             repeats = repeats[0]
         else:
             repeats = torch.Size(repeats)
-        return Repeat.apply(self, repeats)
+        return Repeat(repeats)(self)
 
     def cumsum(self, dim):
         return Cumsum(dim)(self)
@@ -537,10 +545,10 @@ class Variable(_C._VariableBase):
         return self._static_blas(Addr, (output, 0, 1, self, vector), False)
 
     def resize(self, *sizes):
-        return Resize.apply()(self, sizes)
+        return Resize(*sizes)(self)
 
     def resize_as(self, variable):
-        return Resize.apply(self, variable.size())
+        return Resize(*variable.size())(self)
 
     def addmm(self, *args):
         return self._blas(Addmm, args, False)
@@ -596,49 +604,49 @@ class Variable(_C._VariableBase):
         return Norm(p)(self - tensor)
 
     def index_add(self, dim, index, tensor):
-        return IndexAdd.apply(self, dim, index, tensor)
+        return IndexAdd(dim)(self, index, tensor)
 
     def index_add_(self, dim, index, tensor):
-        return IndexAdd.apply(self, dim, index, tensor, True)
+        return IndexAdd(dim, True)(self, index, tensor)
 
     def index_copy(self, dim, index, tensor):
-        return IndexCopy.apply(self, dim, index, tensor)
+        return IndexCopy(dim)(self, index, tensor)
 
     def index_copy_(self, dim, index, tensor):
-        return IndexCopy.apply(self, dim, index, tensor, True)
+        return IndexCopy(dim, True)(self, index, tensor)
 
     def index_fill(self, dim, index, value):
-        return IndexFill.apply(self, dim, index, value)
+        return IndexFill(dim, value)(self, index)
 
     def index_fill_(self, dim, index, value):
-        return IndexFill.apply(self, dim, index, value, True)
+        return IndexFill(dim, value, True)(self, index)
 
     def index_select(self, dim, index):
-        return IndexSelect.apply(self, dim, index)
+        return IndexSelect(dim)(self, index)
 
     def gather(self, dim, index):
-        return Gather.apply(self, dim, index)
+        return Gather(dim)(self, index)
 
     def scatter(self, dim, index, source):
-        return Scatter.apply(self, dim, index, source)
+        return Scatter(dim)(self, index, source)
 
     def scatter_(self, dim, index, source):
-        return Scatter.apply(self, dim, index, source, True)
+        return Scatter(dim, True)(self, index, source)
 
     def masked_copy(self, mask, variable):
-        return MaskedCopy.apply(self, mask, variable)
+        return MaskedCopy()(self, mask, variable)
 
     def masked_copy_(self, mask, variable):
-        return MaskedCopy.apply(self, mask, variable, True)
+        return MaskedCopy(True)(self, mask, variable)
 
     def masked_fill(self, mask, value):
-        return MaskedFill.apply(self, mask, value)
+        return MaskedFill(value)(self, mask)
 
     def masked_fill_(self, mask, value):
-        return MaskedFill.apply(self, mask, value, True)
+        return MaskedFill(value, True)(self, mask)
 
     def masked_select(self, mask):
-        return MaskedSelect.apply(self, mask)
+        return MaskedSelect()(self, mask)
 
     def expand(self, *sizes):
         if isinstance(sizes[0], torch.Size):
@@ -646,39 +654,40 @@ class Variable(_C._VariableBase):
                 raise ValueError("expand expects a several ints or a single "
                                  "torch.Size argument")
             sizes = sizes[0]
-        return Expand.apply(self, sizes)
+        return Expand(sizes)(self)
 
     def expand_as(self, tensor):
-        return Expand.apply(self, tensor.size())
+        return Expand(tensor.size())(self)
 
     def t(self):
-        return Transpose.apply(self, 0, 1)
+        return Transpose(0, 1)(self)
 
     def transpose(self, dim1, dim2):
-        return Transpose.apply(self, dim1, dim2)
+        return Transpose(dim1, dim2)(self)
 
     def select(self, dim, _index):
         dim = dim if dim >= 0 else dim + self.dim()
         index = tuple(slice(None, None) for _ in range(dim)) + (_index,)
-        return Index.apply(self, index)
+        return Index(index)(self)
 
     def narrow(self, dim, start_index, length):
         dim = dim if dim >= 0 else dim + self.dim()
         index = tuple(slice(None, None) for _ in range(dim)) + \
             (slice(start_index, start_index + length),)
-        return Index.apply(self, index)
+
+        return Index(index)(self)
 
     def chunk(self, num_chunks, dim=0):
-        return Chunk.apply(self, num_chunks, dim)
+        return Chunk(num_chunks, dim)(self)
 
     def squeeze(self, dim=None):
-        return Squeeze.apply(self, dim)
+        return Squeeze(dim)(self)
 
     def unsqueeze(self, dim):
-        return Unsqueeze.apply(self, dim)
+        return Unsqueeze(dim)(self)
 
     def permute(self, *permutation):
-        return Permute.apply(self, permutation)
+        return Permute(permutation)(self)
 
     def diag(self, diagonal_idx=0):
         return Diag(diagonal_idx)(self)
@@ -751,7 +760,7 @@ class Variable(_C._VariableBase):
         return self.sub_(other)
 
     def __rsub__(self, other):
-        return SubConstant.apply(other, self)
+        return SubConstant(other, sub_tensor=True)(self)
 
     def __mul__(self, other):
         return self.mul(other)
@@ -782,7 +791,7 @@ class Variable(_C._VariableBase):
     __truediv__ = __div__
 
     def __rdiv__(self, other):
-        return DivConstant.apply(other, self)
+        return DivConstant(other, div_by_tensor=True)(self)
     __rtruediv__ = __rdiv__
 
     def __idiv__(self, other):
@@ -795,10 +804,10 @@ class Variable(_C._VariableBase):
         raise NotImplementedError("in-place pow not implemented")
 
     def __rpow__(self, other):
-        return PowConstant.apply(other, self)
+        return PowConstant(other, tensor_power=True)(self)
 
     def __neg__(self):
-        return Negate.apply(self)
+        return Negate()(self)
 
     def __len__(self):
         return len(self.data)
@@ -834,7 +843,7 @@ class Variable(_C._VariableBase):
 
         @staticmethod
         def cat(iterable, dim=0):
-            return Concat.apply(dim, *iterable)
+            return Concat(dim)(*iterable)
 
         @staticmethod
         def normal(means, std=1):
@@ -891,6 +900,5 @@ for method in dir(Variable):
     setattr(Variable._torch, method, as_static)
 
 
-from ._functions import *
 from torch._C import _ImperativeEngine as ImperativeEngine
 Variable._execution_engine = ImperativeEngine()

@@ -134,7 +134,6 @@ class Optimizer(object):
             for param in group['params']:
                 if param.grad is not None:
                     param.grad.data.zero_()
-                    param.grad.detach_()
 
     def step(self, closure):
         """Performs a single optimization step (parameter update).
