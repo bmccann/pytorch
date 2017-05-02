@@ -10,41 +10,41 @@ namespace torch { namespace autograd {
 Variable::Variable(
   std::unique_ptr<thpp::Tensor> data,
   bool requires_grad,
-  bool is_volatile,
-  bool is_leaf)
+  bool is_volatile)
     : data(std::move(data))
-    , grad_fn(nullptr)
+    , creator(nullptr)
     , grad(nullptr)
     , version_counter(new VariableVersion())
-    , requires_grad(requires_grad)
-    , is_volatile(is_volatile)
-    , is_leaf(is_leaf)
     , output_nr(0)
     , pyobj(nullptr)
 {
-  if (!this->data) throw std::runtime_error("Variable data is NULL");
-  // Function fields
-  this->is_executable = requires_grad;
+  if (!this->data) {
+    throw std::runtime_error("Variable data is NULL");
+  }
+  this->is_volatile = is_volatile;
+  this->requires_grad = requires_grad;
 }
 
 Variable::Variable(
   std::unique_ptr<thpp::Tensor> data,
-  std::shared_ptr<Function> grad_fn)
+  std::shared_ptr<Function> creator)
     : data(std::move(data))
-    , grad_fn(grad_fn)
+    , creator(creator)
     , grad(nullptr)
     , version_counter(new VariableVersion())
-    , requires_grad(grad_fn->is_executable)
-    , is_volatile(false)
-    , is_leaf(false)
-    , output_nr(grad_fn->num_inputs++)
+    , output_nr(creator->num_outputs++)
     , pyobj(nullptr)
 {
-  if (!this->data) throw std::runtime_error("Variable data is NULL");
-  this->is_executable = this->requires_grad;
+  if (!this->data) {
+    throw std::runtime_error("Variable data is NULL");
+  }
+  this->is_volatile = creator->is_volatile;
+  this->requires_grad = creator->requires_grad;
+  previous_functions.resize(1);
+  previous_functions[0] = std::make_pair<>(creator, output_nr);
 }
 
-auto Variable::accumulate_grad(std::shared_ptr<Variable> gradOutput) -> void {
+auto Variable::backward(std::shared_ptr<Variable> gradOutput) -> void {
   if (!pre_hooks.empty()) {
     for (auto& hook : pre_hooks) {
       gradOutput = (*hook)(variable_list({gradOutput}))[0];
@@ -64,17 +64,13 @@ auto Variable::accumulate_grad(std::shared_ptr<Variable> gradOutput) -> void {
 }
 
 auto Variable::apply(const variable_list& gradOutputs) -> variable_list {
-  if (grad_fn) {
-    throw std::logic_error("non-leaf variable saved in a graph!");
-  }
-  if (**version_counter != 0) {
+  if (creator || **version_counter != 0) {
     throw std::runtime_error("leaf variable was used in an inplace operation");
   }
   if (gradOutputs.size() != 1) {
-    throw std::runtime_error(std::string("variable expected 1 grad_output but got ") +
-                             std::to_string(gradOutputs.size()));
+    throw std::runtime_error("incorrect number of gradOutputs");
   }
-  accumulate_grad(gradOutputs[0]);
+  backward(gradOutputs[0]);
   return variable_list();
 }
 

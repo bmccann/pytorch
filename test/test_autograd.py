@@ -270,7 +270,7 @@ class TestAutograd(TestCase):
         z = x ** 2
         self.assertFalse(z.volatile)
         self.assertTrue(z.requires_grad)
-        self.assertIsNotNone(z.grad_fn)
+        self.assertIsNotNone(z.creator)
         z.backward(torch.ones(5, 5))
         self.assertEqual(x.grad.data, torch.ones(5, 5) * 2)
 
@@ -278,7 +278,7 @@ class TestAutograd(TestCase):
         self.assertTrue(w.volatile)
         self.assertFalse(w.requires_grad)
         self.assertRaises(RuntimeError, lambda: w.backward(torch.ones(5, 5)))
-        self.assertIsNone(w.grad_fn)
+        self.assertIsNone(w.creator)
 
     def test_indexing(self):
         x = torch.arange(1, 17).resize_(4, 4)
@@ -376,23 +376,23 @@ class TestAutograd(TestCase):
         with self.assertRaises(RuntimeError):
             torch.autograd.backward([b], [None])
 
-    def test_next_functions(self):
+    def test_previous_functions(self):
         x = Variable(torch.randn(5, 5), requires_grad=True)
         y = Variable(torch.randn(5, 5), requires_grad=True)
 
         a = x + y
-        self.assertIsNotNone(a.grad_fn)
-        next_functions = a.grad_fn.next_functions
-        self.assertEqual(len(next_functions), 2)
-        self.assertIs(next_functions[0][0], x)
-        self.assertEqual(next_functions[0][1], 0)
-        self.assertIs(next_functions[1][0], y)
-        self.assertEqual(next_functions[1][1], 0)
+        self.assertIsNotNone(a.creator)
+        previous_functions = a.creator.previous_functions
+        self.assertEqual(len(previous_functions), 2)
+        self.assertIs(previous_functions[0][0], x)
+        self.assertEqual(previous_functions[0][1], 0)
+        self.assertIs(previous_functions[1][0], y)
+        self.assertEqual(previous_functions[1][1], 0)
 
         b = a + 5
-        next_functions = b.grad_fn.next_functions
-        self.assertEqual(len(next_functions), 1)
-        self.assertIs(next_functions[0][0], a.grad_fn)
+        previous_functions = b.creator.previous_functions
+        self.assertEqual(len(previous_functions), 1)
+        self.assertIs(previous_functions[0][0], a.creator)
 
     def test_inplace(self):
         x = Variable(torch.ones(5, 5), requires_grad=True)
@@ -543,7 +543,7 @@ class TestAutograd(TestCase):
                 gc.collect()
 
         for i in range(10):
-            Variable(torch.randn(10, 10), grad_fn=CollectOnDelete())
+            Variable(torch.randn(10, 10), creator=CollectOnDelete())
 
     @unittest.skipIf(not torch.cuda.is_available() or torch.cuda.device_count() < 2,
                      "CUDA not available or <2 GPUs detected")
@@ -567,7 +567,7 @@ class TestAutograd(TestCase):
         y = x * 2
         y = y.detach()
         self.assertFalse(y.requires_grad)
-        self.assertIsNone(y.grad_fn)
+        self.assertIsNone(y.creator)
         z = x + y
         z.sum().backward()
         # This is an incorrect gradient, but we assume that's what the user
@@ -669,7 +669,7 @@ class TestAutograd(TestCase):
         fn = Inplace(True)
         q, p = fn(x, y)
         self.assertIs(q, x)
-        self.assertIs(q.grad_fn, fn)
+        self.assertIs(q.creator, fn)
         self.assertTrue(q.requires_grad)
         q.sum().backward()
         self.assertEqual(y.grad.data, torch.ones(5, 5))
@@ -682,7 +682,7 @@ class TestAutograd(TestCase):
         x[0] = y
         x[1] = 2 * z
         self.assertTrue(x.requires_grad)
-        self.assertIsNot(x.grad_fn, None)
+        self.assertIsNot(x.creator, None)
         x.sum().backward()
         self.assertEqual(y.grad.data, torch.ones(5))
         self.assertEqual(z.grad.data, torch.ones(5) * 2)
@@ -1293,7 +1293,7 @@ for test in function_tests:
         def do_test(self, cls=cls, constructor_args=new_constructor_args,
                     call_args=call_args, test_name=test_name):
             input = create_input(call_args)
-            self.assertTrue(gradcheck(lambda *input: cls(*constructor_args)(*input), input, eps=1e-6, atol=PRECISION))
+            self.assertEqual(gradcheck(cls(*constructor_args), input, eps=1e-6, atol=PRECISION), True)
 
             if test_name not in ignore_inplace and issubclass(cls, InplaceFunction):
                 output = cls(*constructor_args)(*input)

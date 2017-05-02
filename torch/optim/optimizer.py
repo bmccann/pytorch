@@ -57,7 +57,7 @@ class Optimizer(object):
                 if not param.requires_grad:
                     raise ValueError("optimizing a parameter that doesn't "
                                      "require gradients")
-                if not param.is_leaf:
+                if param.creator is not None:
                     raise ValueError("can't optimize a non-leaf Variable")
 
     def __getstate__(self):
