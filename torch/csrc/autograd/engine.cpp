@@ -3,7 +3,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <functional>
 #include <iostream>
 #include <mutex>
 #include <set>
@@ -33,12 +32,12 @@ namespace torch { namespace autograd {
 struct FunctionTask {
   GraphTask* base;
   std::shared_ptr<Function> fn;
-  InputBuffer inputs;
+  InputBuffer grad;
 
-  FunctionTask(GraphTask* base, std::shared_ptr<Function> fn, InputBuffer inputs)
+  FunctionTask(GraphTask* base, std::shared_ptr<Function> fn, InputBuffer grad)
     : base(base)
     , fn(fn)
-    , inputs(std::move(inputs)) {}
+    , grad(std::move(grad)) {}
 };
 
 struct ReadyQueue {
@@ -59,11 +58,10 @@ struct GraphTask {
 
   std::mutex mutex;
   std::condition_variable not_done;
-  const Engine::callback_map& function_callbacks;
   std::unordered_map<Function*, InputBuffer> not_ready;
   std::unordered_map<Function*, int> dependencies;
 
-  GraphTask(bool keep_graph, const Engine::callback_map& function_callbacks)
+  GraphTask(bool keep_graph)
     : exception()
     , has_error(false)
     , outstanding_tasks(0)
@@ -71,7 +69,6 @@ struct GraphTask {
     , has_any_work(false)
     , mutex()
     , not_done()
-    , function_callbacks(function_callbacks)
     , not_ready()
     , dependencies() {}
 };
@@ -123,40 +120,28 @@ auto Engine::thread_on_exception(FunctionTask& task, std::exception& e) -> void 
   }
 }
 
-static variable_list call_pre_hooks(Function& fn, variable_list inputs) {
+static variable_list call_pre_hooks(Function& fn, variable_list grad_output) {
   for (auto& hook : fn.pre_hooks) {
-    inputs = (*hook)(inputs);
+    grad_output = (*hook)(grad_output);
   }
-  return inputs;
+  return grad_output;
 }
 
-static variable_list call_post_hooks(Function& fn, variable_list outputs, variable_list inputs) {
+static variable_list call_post_hooks(Function& fn, variable_list grad_input, variable_list grad_output) {
   for (auto& hook : fn.post_hooks) {
-    outputs = (*hook)(outputs, inputs);
+    grad_input = (*hook)(grad_input, grad_output);
   }
-  return outputs;
+  return grad_input;
 }
 
-static std::pair<bool, variable_list> call_function(FunctionTask& task) {
-  auto& fn = *task.fn;
-  auto inputs = call_pre_hooks(fn, InputBuffer::variables(std::move(task.inputs)));
-
-  auto& function_callbacks = task.base->function_callbacks;
-  auto callback_it = function_callbacks.find(&fn);
-  if (callback_it != function_callbacks.end()) {
-    auto& callback = callback_it->second;
-    if (!callback(&fn, inputs)) return std::make_pair(false, variable_list());
-  }
-
-  auto fn_outputs = fn.apply(inputs);
-  auto outputs = call_post_hooks(fn, std::move(fn_outputs), std::move(inputs));
-  return std::make_pair(true, std::move(outputs));
+static variable_list call_function(FunctionTask& task) {
+  auto grad_output = call_pre_hooks(*task.fn, InputBuffer::variables(std::move(task.grad)));
+  auto grad_input = task.fn->apply(grad_output);
+  return call_post_hooks(*task.fn, std::move(grad_input), std::move(grad_output));
 }
 
 auto Engine::evaluate_function(FunctionTask& task) -> void {
-  auto call_result = call_function(task);
-  if (!call_result.first) return;
-  auto outputs = call_result.second;
+  auto outputs = call_function(task);
 
   auto& fn = *task.fn;
   if (!task.base->keep_graph) {
@@ -306,12 +291,12 @@ auto Engine::find_roots(const function_list& input_roots,
 }
 
 auto Engine::execute(const function_list& input_roots,
-                     variable_list& inputs,
-                     bool keep_graph,
-                     const callback_map& callbacks) -> void {
-  std::call_once(start_threads_flag, &Engine::start_threads, this);
+                      variable_list& inputs,
+                      bool keep_graph) -> void {
+  static std::once_flag once_flag;
+  std::call_once(once_flag, &Engine::start_threads, this);
 
-  GraphTask graph_task(keep_graph, callbacks);
+  GraphTask graph_task(keep_graph);
   std::unique_lock<std::mutex> lock(graph_task.mutex);
 
   // Find the unique roots and backprop into variables.

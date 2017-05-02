@@ -9,8 +9,6 @@ Automatic differentiation package - torch.autograd
 
 .. autofunction:: backward
 
-.. autofunction:: differentiate
-
 Variable
 --------
 
