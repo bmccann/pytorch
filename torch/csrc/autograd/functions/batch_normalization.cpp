@@ -78,16 +78,16 @@ auto BatchNormForward::apply(const variable_list& inputs) -> variable_list {
   return wrap_outputs(inputs, std::move(outputs), [&](FunctionFlags f) {
     return std::make_shared<BatchNormBackward>(
         f, *this, std::move(save_mean), std::move(save_std),
-        input->save(this),
-        Variable::save_opt(weight.get(), this),
-        Variable::save_opt(bias.get(), this));
+        input->save(),
+        Variable::save_opt(weight.get()),
+        Variable::save_opt(bias.get()));
   });
 };
 
 auto BatchNormBackward::apply(const variable_list& grad_outputs) -> variable_list {
-  auto input = this->input.unpack_data();
-  auto weight = this->weight.unpack_data();
-  auto bias = this->bias.unpack_data();
+  auto& input = this->input.unpack();
+  auto& weight = this->weight.unpack();
+  auto& bias = this->bias.unpack();
   AutoGPU guard(input->getDevice());
 
   bool use_cudnn = false;
